@@ -16,6 +16,15 @@ server.use(cors())
 
 server.get("/", (c) => c.text("Server running"))
 
+// Health check endpoint for UptimeRobot / monitoring services
+server.get("/health", (c) =>
+  c.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  }),
+)
+
 server.route("/chat/completions", completionRoutes)
 server.route("/models", modelRoutes)
 server.route("/embeddings", embeddingRoutes)

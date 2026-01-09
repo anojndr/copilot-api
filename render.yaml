@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: copilot-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: GH_TOKEN
+        sync: false
+      - key: PORT
+        value: 10000
+    healthCheckPath: /health

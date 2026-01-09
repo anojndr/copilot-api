@@ -116,6 +116,67 @@ The Docker image includes:
 - Health check for container monitoring
 - Pinned base image version for reproducible builds
 
+## Deploying to Render (Free Tier 24/7)
+
+You can deploy this project to [Render](https://render.com/) for free and keep it running 24/7 using [UptimeRobot](https://uptimerobot.com/).
+
+### Prerequisites
+
+1. A GitHub account with Copilot subscription
+2. A [Render](https://render.com/) account (free tier)
+3. An [UptimeRobot](https://uptimerobot.com/) account (free)
+4. A GitHub token generated using `npx copilot-api@latest auth`
+
+### Step 1: Deploy to Render
+
+#### Option A: One-Click Deploy with Blueprint
+
+1. Fork this repository to your GitHub account
+2. Go to [Render Dashboard](https://dashboard.render.com/)
+3. Click **New** → **Blueprint**
+4. Connect your GitHub account and select your forked repository
+5. Render will detect the `render.yaml` file and set up the service
+6. Add your `GH_TOKEN` environment variable when prompted
+
+#### Option B: Manual Deploy
+
+1. Go to [Render Dashboard](https://dashboard.render.com/)
+2. Click **New** → **Web Service**
+3. Connect your GitHub repository
+4. Configure:
+   - **Name**: `copilot-api` (or any name)
+   - **Runtime**: Docker
+   - **Plan**: Free
+   - **Environment Variables**:
+     - `GH_TOKEN`: Your GitHub token from `npx copilot-api@latest auth`
+     - `PORT`: `10000` (Render's default)
+5. Click **Create Web Service**
+
+### Step 2: Keep Alive with UptimeRobot
+
+Render's free tier services **spin down after 15 minutes of inactivity**. UptimeRobot prevents this by pinging your service regularly.
+
+1. Go to [UptimeRobot Dashboard](https://dashboard.uptimerobot.com/)
+2. Click **Add New Monitor**
+3. Configure:
+   - **Monitor Type**: HTTP(s)
+   - **Friendly Name**: `Copilot API`
+   - **URL**: `https://your-service-name.onrender.com/health`
+   - **Monitoring Interval**: 5 minutes
+4. Click **Create Monitor**
+
+> **Note:** The `/health` endpoint returns JSON with status info:
+> ```json
+> { "status": "ok", "timestamp": "2026-01-09T04:23:10.000Z", "uptime": 12345 }
+> ```
+
+### Important Notes
+
+- **Cold Start**: On the first request after spinning down, Render takes ~30-60 seconds to start the container
+- **GitHub Token**: Your token is stored securely as an environment variable in Render
+- **Usage**: Monitor your Copilot usage at `https://your-service-name.onrender.com/usage`
+
+
 ## Using with npx
 
 You can run the project directly using npx:
