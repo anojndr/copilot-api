@@ -4,6 +4,7 @@ import { defineCommand } from "citty"
 import clipboard from "clipboardy"
 import consola from "consola"
 import fs from "node:fs"
+import path from "node:path"
 import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
@@ -15,6 +16,74 @@ import { initTokenRotator } from "./lib/token-rotator"
 import { setupCopilotToken, setupGitHubToken } from "./lib/token"
 import { cacheModels, cacheVSCodeVersion } from "./lib/utils"
 import { server } from "./server"
+
+/**
+ * Load environment variables from .env file.
+ * This is needed when running with npm/node instead of Bun.
+ */
+function loadEnvFile(): void {
+  const envPaths = [
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), ".env.local"),
+  ]
+
+  for (const envPath of envPaths) {
+    try {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, "utf8")
+        consola.debug(`Loading environment from ${envPath}`)
+
+        // Parse each line
+        for (const line of content.split("\n")) {
+          const trimmed = line.trim()
+
+          // Skip comments and empty lines
+          if (!trimmed || trimmed.startsWith("#")) continue
+
+          // Handle KEY=VALUE or KEY="VALUE" format
+          const match = trimmed.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/i)
+          if (match) {
+            const [, key, rawValue] = match
+
+            // Handle multi-line values in quotes
+            let value = rawValue
+
+            // Remove surrounding quotes if present
+            if (
+              (value.startsWith('"') && value.endsWith('"')) ||
+              (value.startsWith("'") && value.endsWith("'"))
+            ) {
+              value = value.slice(1, -1)
+            } else if (value.startsWith('"') || value.startsWith("'")) {
+              // Multi-line value: find the rest until closing quote
+              const quote = value[0]
+              const startIdx = content.indexOf(line)
+              const endQuoteIdx = content.indexOf(
+                quote,
+                startIdx + line.indexOf("=") + 2,
+              )
+              if (endQuoteIdx !== -1) {
+                value = content.slice(
+                  startIdx + line.indexOf("=") + 2,
+                  endQuoteIdx,
+                )
+              }
+            }
+
+            // Only set if not already defined
+            if (!process.env[key]) {
+              process.env[key] = value
+              consola.debug(`Set ${key} from .env`)
+            }
+          }
+        }
+        break // Only load the first .env file found
+      }
+    } catch (error) {
+      consola.debug(`Failed to load ${envPath}:`, error)
+    }
+  }
+}
 
 /**
  * Load tokens from Render.com's secret files or other file paths.
@@ -64,6 +133,9 @@ interface RunServerOptions {
 }
 
 export async function runServer(options: RunServerOptions): Promise<void> {
+  // Load .env file for npm/node compatibility
+  loadEnvFile()
+
   if (options.proxyEnv) {
     initProxyFromEnv()
   }

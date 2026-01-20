@@ -13,16 +13,26 @@ const TOKEN_ERROR_STATUSES = [
 ]
 
 /**
+ * Maximum number of full cycles through all tokens before giving up.
+ */
+const MAX_RETRY_ROUNDS = 5
+
+/**
  * Wrapper for fetch that automatically rotates tokens on specific errors.
  * Only active when multiple tokens are configured via TokenRotator.
  *
+ * Retry strategy:
+ * - On error, rotate to the next token
+ * - After trying all tokens, reset and start a new round
+ * - Repeat for up to MAX_RETRY_ROUNDS (5) complete cycles
+ *
  * @param makeRequest - Function that performs the actual fetch request
- * @param maxRetries - Maximum number of retry attempts (defaults to number of available tokens)
+ * @param maxRounds - Maximum number of complete cycles through all tokens (default: 5)
  * @returns The response from a successful request
  */
 export async function withTokenRotation<T>(
     makeRequest: () => Promise<T>,
-    maxRetries?: number,
+    maxRounds: number = MAX_RETRY_ROUNDS,
 ): Promise<T> {
     // If no token rotator, just execute the request normally
     if (!hasTokenRotator()) {
@@ -30,40 +40,52 @@ export async function withTokenRotation<T>(
     }
 
     const rotator = getTokenRotator()
-    const retries = maxRetries ?? rotator.getAvailableCount()
+    const totalTokens = rotator.getTotalCount()
     let lastError: unknown
 
-    for (let attempt = 0; attempt < retries; attempt++) {
-        try {
-            return await makeRequest()
-        } catch (error) {
-            lastError = error
+    for (let round = 0; round < maxRounds; round++) {
+        // Reset all tokens at the start of each round (except first)
+        if (round > 0) {
+            consola.warn(
+                `Round ${round}/${maxRounds} failed. Starting retry round ${round + 1}...`,
+            )
+            rotator.resetAll()
+        }
 
-            // Check if this is a token-related error that should trigger rotation
-            if (shouldRotateToken(error)) {
-                const currentIndex = rotator.getCurrentIndex()
-                consola.warn(
-                    `Token ${currentIndex}/${rotator.getTotalCount()} failed, rotating to next token...`,
-                )
+        // Try each token in this round
+        for (let tokenIdx = 0; tokenIdx < totalTokens; tokenIdx++) {
+            try {
+                return await makeRequest()
+            } catch (error) {
+                lastError = error
 
-                // Mark current token as bad and try to rotate
-                const hasMore = rotator.markCurrentBad()
+                // Check if this is a token-related error that should trigger rotation
+                if (shouldRotateToken(error)) {
+                    const currentIndex = rotator.getCurrentIndex()
+                    consola.warn(
+                        `Token ${currentIndex}/${totalTokens} failed (round ${round + 1}/${maxRounds}), trying next...`,
+                    )
 
-                if (!hasMore) {
-                    consola.error("All tokens have been exhausted!")
-                    break
+                    // Try to rotate to next token
+                    rotator.rotate()
+
+                    // Continue to next token in this round
+                    continue
                 }
 
-                // Continue to next attempt with the new token
-                continue
+                // Not a token error, re-throw immediately
+                throw error
             }
-
-            // Not a token error, re-throw immediately
-            throw error
         }
+
+        // All tokens in this round failed, will reset and try again
+        consola.warn(`All ${totalTokens} tokens failed in round ${round + 1}`)
     }
 
-    // All retries exhausted
+    // All rounds exhausted
+    consola.error(
+        `All ${maxRounds} retry rounds exhausted with ${totalTokens} tokens. Giving up.`,
+    )
     throw lastError
 }
 
