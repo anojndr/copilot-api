@@ -3,6 +3,7 @@
 import { defineCommand } from "citty"
 import clipboard from "clipboardy"
 import consola from "consola"
+import fs from "node:fs"
 import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
@@ -14,6 +15,40 @@ import { initTokenRotator } from "./lib/token-rotator"
 import { setupCopilotToken, setupGitHubToken } from "./lib/token"
 import { cacheModels, cacheVSCodeVersion } from "./lib/utils"
 import { server } from "./server"
+
+/**
+ * Load tokens from Render.com's secret files or other file paths.
+ * Supports /etc/secrets/.env format used by Render.
+ */
+function loadTokensFromSecretFile(): string | undefined {
+  const secretPaths = [
+    "/etc/secrets/.env",
+    "/etc/secrets/tokens",
+    "/etc/secrets/gh_tokens",
+  ]
+
+  for (const secretPath of secretPaths) {
+    try {
+      if (fs.existsSync(secretPath)) {
+        const content = fs.readFileSync(secretPath, "utf8")
+        consola.debug(`Found secret file at ${secretPath}`)
+
+        // Try to parse as .env format (GH_TOKENS=... or GH_TOKEN=...)
+        const tokensMatch = content.match(/^GH_TOKENS?=["']?([\s\S]*?)["']?$/m)
+        if (tokensMatch) {
+          return tokensMatch[1]
+        }
+
+        // If not .env format, treat entire file as token list
+        return content
+      }
+    } catch {
+      // File doesn't exist or can't be read, continue to next
+    }
+  }
+
+  return undefined
+}
 
 interface RunServerOptions {
   port: number
@@ -51,11 +86,12 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   await ensurePaths()
   await cacheVSCodeVersion()
 
-  // Priority: CLI argument > GH_TOKENS env > GH_TOKEN env > interactive auth
+  // Priority: CLI argument > GH_TOKENS env > GH_TOKEN env > secret file > interactive auth
   const tokenSource =
     options.githubToken ||
     process.env.GH_TOKENS ||
-    process.env.GH_TOKEN
+    process.env.GH_TOKEN ||
+    loadTokensFromSecretFile()
 
   if (tokenSource) {
     // Support multiple tokens separated by comma or newline
