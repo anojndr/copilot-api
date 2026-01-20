@@ -10,6 +10,7 @@ import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { generateEnvScript } from "./lib/shell"
 import { state } from "./lib/state"
+import { initTokenRotator } from "./lib/token-rotator"
 import { setupCopilotToken, setupGitHubToken } from "./lib/token"
 import { cacheModels, cacheVSCodeVersion } from "./lib/utils"
 import { server } from "./server"
@@ -50,9 +51,32 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   await ensurePaths()
   await cacheVSCodeVersion()
 
-  if (options.githubToken) {
-    state.githubToken = options.githubToken
-    consola.info("Using provided GitHub token")
+  // Priority: CLI argument > GH_TOKENS env > GH_TOKEN env > interactive auth
+  const tokenSource =
+    options.githubToken ||
+    process.env.GH_TOKENS ||
+    process.env.GH_TOKEN
+
+  if (tokenSource) {
+    // Support multiple tokens separated by comma or newline
+    // This allows .env files with tokens on separate lines
+    const tokens = tokenSource
+      .split(/[,\n]/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0 && !t.startsWith("#")) // Filter empty and comments
+
+    if (tokens.length > 1) {
+      // Multi-token mode with rotation
+      initTokenRotator(tokens)
+      consola.info(`Using ${tokens.length} GitHub tokens with rotation`)
+    } else if (tokens.length === 1) {
+      // Single token mode (backwards compatible)
+      state.githubToken = tokens[0]
+      consola.info("Using provided GitHub token")
+    } else {
+      // All tokens were empty or comments, fall back to interactive
+      await setupGitHubToken()
+    }
   } else {
     await setupGitHubToken()
   }
@@ -165,7 +189,7 @@ export const start = defineCommand({
       alias: "g",
       type: "string",
       description:
-        "Provide GitHub token directly (must be generated using the `auth` subcommand)",
+        "Provide GitHub token(s) directly. Use comma-separated values for multiple tokens (e.g., 'token1,token2,token3') to enable token rotation",
     },
     "claude-code": {
       alias: "c",

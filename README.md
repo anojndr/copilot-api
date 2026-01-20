@@ -38,6 +38,7 @@ A reverse-engineered proxy for the GitHub Copilot API that exposes it as an Open
 - **Manual Request Approval**: Manually approve or deny each API request for fine-grained control over usage (`--manual`).
 - **Token Visibility**: Option to display GitHub and Copilot tokens during authentication and refresh for debugging (`--show-token`).
 - **Flexible Authentication**: Authenticate interactively or provide a GitHub token directly, suitable for CI/CD environments.
+- **Multi-Token Rotation**: Support for multiple GitHub tokens with automatic rotation on failures or rate limits.
 - **Support for Different Account Types**: Works with individual, business, and enterprise GitHub Copilot plans.
 
 ## Demo
@@ -220,7 +221,7 @@ The following command line options are available for the `start` command:
 | --manual       | Enable manual request approval                                                | false      | none  |
 | --rate-limit   | Rate limit in seconds between requests                                        | none       | -r    |
 | --wait         | Wait instead of error when rate limit is hit                                  | false      | -w    |
-| --github-token | Provide GitHub token directly (must be generated using the `auth` subcommand) | none       | -g    |
+| --github-token | Provide GitHub token(s). Use comma-separated values for multiple tokens to enable rotation | none       | -g    |
 | --claude-code  | Generate a command to launch Claude Code with Copilot API config              | false      | -c    |
 | --show-token   | Show GitHub and Copilot tokens on fetch and refresh                           | false      | none  |
 | --proxy-env    | Initialize proxy from environment variables                                   | false      | none  |
@@ -298,6 +299,9 @@ npx copilot-api@latest start --rate-limit 30 --wait
 
 # Provide GitHub token directly
 npx copilot-api@latest start --github-token ghp_YOUR_TOKEN_HERE
+
+# Provide multiple GitHub tokens for rotation
+npx copilot-api@latest start --github-token "token1,token2,token3"
 
 # Run only the auth flow
 npx copilot-api@latest auth
@@ -410,3 +414,87 @@ bun run start
   - `--rate-limit <seconds>`: Enforces a minimum time interval between requests. For example, `copilot-api start --rate-limit 30` will ensure there's at least a 30-second gap between requests.
   - `--wait`: Use this with `--rate-limit`. It makes the server wait for the cooldown period to end instead of rejecting the request with an error. This is useful for clients that don't automatically retry on rate limit errors.
 - If you have a GitHub business or enterprise plan account with Copilot, use the `--account-type` flag (e.g., `--account-type business`). See the [official documentation](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for more details.
+
+## Multi-Token Rotation
+
+You can provide multiple GitHub tokens to enable automatic token rotation. This helps with:
+
+- **Rate Limit Avoidance**: If one token hits its rate limit, the system automatically rotates to the next available token.
+- **Increased Reliability**: If a token becomes invalid or unauthorized, the system automatically falls back to other tokens.
+- **Load Distribution**: Spread usage across multiple tokens.
+
+### Using Multiple Tokens
+
+**Via CLI:**
+
+```sh
+# Comma-separated tokens
+npx copilot-api@latest start --github-token "token1,token2,token3"
+```
+
+**Via Environment Variables (Docker):**
+
+```sh
+# Using GH_TOKENS (plural) for multiple tokens
+docker run -p 4141:4141 -e GH_TOKENS="token1,token2,token3" copilot-api
+
+# Or using GH_TOKEN for a single token (backwards compatible)
+docker run -p 4141:4141 -e GH_TOKEN=your_token copilot-api
+```
+
+**Docker Compose:**
+
+```yaml
+version: "3.8"
+services:
+  copilot-api:
+    build: .
+    ports:
+      - "4141:4141"
+    environment:
+      - GH_TOKENS=token1,token2,token3
+    restart: unless-stopped
+```
+
+**Via `.env` File:**
+
+Create a `.env` file in your project root (see `.env.example` for reference):
+
+```sh
+# Option 1: Comma-separated on one line
+GH_TOKENS=ghp_token1,ghp_token2,ghp_token3
+
+# Option 2: Multi-line format (recommended for readability)
+GH_TOKENS="
+ghp_your_first_token
+ghp_your_second_token
+ghp_your_third_token
+"
+```
+
+Then run without specifying tokens:
+
+```sh
+npx copilot-api@latest start
+```
+
+> **Note:** Lines starting with `#` inside the token list are treated as comments and ignored.
+
+### How It Works
+
+1. **Initialization**: On startup, Copilot tokens are fetched for each GitHub token.
+2. **Request Handling**: Requests use the current active token.
+3. **Automatic Rotation**: On 401 (Unauthorized), 403 (Forbidden), or 429 (Rate Limited) errors, the system automatically:
+   - Marks the current token as "bad"
+   - Rotates to the next available token
+   - Retries the request
+4. **Token Refresh**: All tokens are refreshed periodically to maintain validity.
+
+### Token Priority
+
+The system loads tokens in the following priority order:
+
+1. `--github-token` CLI argument
+2. `GH_TOKENS` environment variable
+3. `GH_TOKEN` environment variable
+4. Interactive authentication

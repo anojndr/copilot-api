@@ -9,13 +9,77 @@ import { pollAccessToken } from "~/services/github/poll-access-token"
 
 import { HTTPError } from "./error"
 import { state } from "./state"
+import { getTokenRotator, hasTokenRotator } from "./token-rotator"
 
 const readGithubToken = () => fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
 
 const writeGithubToken = (token: string) =>
   fs.writeFile(PATHS.GITHUB_TOKEN_PATH, token)
 
+/**
+ * Set up copilot tokens for all GitHub tokens in the rotator.
+ * Each GitHub token gets its own copilot token.
+ */
+async function setupAllCopilotTokens(): Promise<number> {
+  const rotator = getTokenRotator()
+  const totalTokens = rotator.getTotalCount()
+  let refreshInterval = 1800 // Default 30 minutes
+
+  consola.info(`Setting up Copilot tokens for ${totalTokens} GitHub token(s)...`)
+
+  for (let i = 0; i < totalTokens; i++) {
+    try {
+      // The state proxy uses the current token from rotator
+      const { token, refresh_in } = await getCopilotToken()
+      rotator.setCopilotToken(token, Date.now() + refresh_in * 1000)
+
+      consola.debug(
+        `Copilot token ${i + 1}/${totalTokens} fetched successfully!`,
+      )
+      if (state.showToken) {
+        consola.info(`Copilot token ${i + 1}:`, token)
+      }
+
+      // Use the smallest refresh interval among all tokens
+      refreshInterval = Math.min(refreshInterval, refresh_in)
+
+      // Rotate to next token for setup
+      if (i < totalTokens - 1) {
+        rotator.rotate()
+      }
+    } catch (error) {
+      consola.error(`Failed to get Copilot token for GitHub token ${i + 1}:`, error)
+      rotator.markCurrentBad()
+    }
+  }
+
+  // Reset to first good token
+  rotator.rotateToNextGood()
+
+  return refreshInterval
+}
+
 export const setupCopilotToken = async () => {
+  if (hasTokenRotator()) {
+    // Multi-token mode: setup copilot tokens for all GitHub tokens
+    const refreshInterval = await setupAllCopilotTokens()
+
+    // Set up refresh interval to refresh all tokens
+    const intervalMs = (refreshInterval - 60) * 1000
+    setInterval(async () => {
+      consola.debug("Refreshing all Copilot tokens")
+      try {
+        await setupAllCopilotTokens()
+        consola.debug("All Copilot tokens refreshed")
+      } catch (error) {
+        consola.error("Failed to refresh Copilot tokens:", error)
+      }
+    }, intervalMs)
+
+    return
+  }
+
+  // Single token mode (backwards compatible)
   const { token, refresh_in } = await getCopilotToken()
   state.copilotToken = token
 
